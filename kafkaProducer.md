@@ -227,7 +227,7 @@ spring:
         # --- Reliability ---
         enable.idempotence: true   # exactly-once guarantees per partition
         acks: all                  # wait for leader + ISR confirmations
-        max.in.flight.requests.per.connection: 5  # safe with idempotence
+        max.in.flight.requests.per.connection: 5  # maximum number of requests (produce requests) that the producer can send without receiving a response, per connection to a Kafka broker.
 
         # --- Fault tolerance ---
         retries: 2147483647        # effectively "infinite"

@@ -104,9 +104,7 @@ public class PaymentProducer {
 
 ---
 
-
-
-# Kafka Producer Acks 
+# Kafka Producer Acks & Durability
 
 ### 1. `acks` – Durability & Data Safety
 
@@ -120,23 +118,50 @@ public class PaymentProducer {
     -   **What it is:** Waits for the leader broker's confirmation only.
     -   **Use Case:** General messaging. A good balance of performance and durability, but with a small risk of data loss if the leader fails before replication.
 
--   **`acks=all` (Full Durability)**
-    -   **What it is:** Waits for the leader and all in-sync replicas to confirm.
+-   **`acks=all` | `-1` (Full Durability)**
+    -   **What it is:** Waits for the leader and all in-sync replicas (ISR) to confirm.
     -   **Use Case:** Critical data that cannot be lost (e.g., financial transactions, orders). Safest but slowest.
+
+> ⚠️ **Note:**
+> The only valid values for `acks` are `0`, `1`, and `all` (or `-1`).
+> You cannot set `acks=2`, `acks=3`, etc. — the producer will fail with a `ConfigException`. To enforce how many replicas must ack, use `min.insync.replicas` on the broker side.
 
 ---
 
-### 2. `enable.idempotence=true` – The Modern Standard
+### 2. ✅ In-Sync Replicas (ISR)
+
+-   **What they are:** The set of replicas (leader + followers) that are fully caught up with the leader’s log.
+-   **Why it's important:** Only ISR members can become the new leader if the current leader fails.
+-   **Controlled by:** Broker property `replica.lag.time.max.ms` (default: 10000ms = 10s). If a follower does not fetch data from the leader within this time, it is removed from the ISR.
+
+---
+
+### 3. `min.insync.replicas` – Stronger Safety Net
+
+-   **What it is:** A broker-side setting (topic-level or cluster-wide).
+-   **Purpose:** Defines the *minimum* number of ISR replicas that must acknowledge a write when a producer uses `acks=all`.
+-   If the number of available ISRs drops below this value, producer requests with `acks=all` will fail with a `NotEnoughReplicasException`.
+
+🔎 **Example:**
+-   Replication factor = `3`
+-   `min.insync.replicas=2`
+-   Producer uses `acks=all`
+
+✔ **Write succeeds** if at least 2 brokers (leader + 1 follower) confirm.
+❌ If only the leader is alive, **writes are rejected**, protecting against silent data loss where data is written to a single replica that might fail.
+
+---
+
+### 4. `enable.idempotence=true` – The Modern Standard
 
 This single setting provides **exactly-once, in-order delivery guarantees** per partition, preventing duplicates from retries.
 
 -   **What it does:** Automatically sets `acks=all` and enables infinite retries (within `delivery.timeout.ms`).
-    - override acks=1 and retries  # or a different value based on your use case if you are not good to go with `enable.idempotence=true` default configs 
--   **Recommendation:** **Always enable this for reliable systems.** It's the simplest way to build a robust producer.
+-   **Recommendation:** **Always enable this for reliable systems.** It's the simplest way to build a robust producer. (If you manually override `acks` or `retries`, ensure they remain compatible with idempotence.)
 
 ---
 
-### 3. Performance Tuning: Throughput vs. Latency
+### 5. Performance Tuning: Throughput vs. Latency
 
 -   **For High Throughput (Batching):**
     -   **Settings:** `linger.ms=10` + `compression.type=snappy`
@@ -150,11 +175,11 @@ This single setting provides **exactly-once, in-order delivery guarantees** per 
 
 ---
 
-### ⚡ Recommended Configurations (Spring & Quarkus)
+### ⚡ Recommended Configurations (Producer + Broker)
 
-**For Maximum Reliability (Most Common):**
+#### Spring Boot Producer (`application.yml`)
+
 ```yaml
-# Spring Boot (application.yml)
 spring:
   kafka:
     producer:
@@ -163,19 +188,34 @@ spring:
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
       properties:
         enable.idempotence: true
+        # acks: all is set automatically by idempotence
         linger.ms: 10
         compression.type: snappy
 ```
+
+#### Quarkus Producer (`application.properties`)
 ```properties
-# Quarkus (application.properties)
+# Kafka Broker Address
 kafka.bootstrap.servers=localhost:9092
+
+# Producer Channel Configuration
 mp.messaging.outgoing.payments-out.connector=smallrye-kafka
 mp.messaging.outgoing.payments-out.topic=payments
 mp.messaging.outgoing.payments-out.key.serializer=org.apache.kafka.common.serialization.StringSerializer
 mp.messaging.outgoing.payments-out.value.serializer=org.apache.kafka.common.serialization.StringSerializer
+
+# Reliability Settings
 mp.messaging.outgoing.payments-out.enable.idempotence=true
+# mp.messaging.outgoing.payments-out.acks=all is set automatically
 mp.messaging.outgoing.payments-out.linger.ms=10
 mp.messaging.outgoing.payments-out.compression.type=snappy
 ```
-}
+
+#### Broker (`server.properties` or Topic-Level)
+```properties
+# Require at least 2 ISR acknowledgments for acks=all requests
+min.insync.replicas=2
+
+# Remove lagging followers from ISR after 10s of no fetching
+replica.lag.time.max.ms=10000
 ```

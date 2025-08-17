@@ -280,3 +280,159 @@ replica.lag.time.max.ms=10000
 # Example:
 # bin/kafka-topics.sh --create --topic payments --partitions 6 \
 #   --replication-factor 3 --config min.insync.replicas=2
+
+```
+
+### We should write the above applicaiton.properties as java config, described below
+
+1️⃣ In Spring Boot, you typically provide producer configs via a `ProducerFactory` and `KafkaTemplate`. You can configure the same properties in a `@Configuration` class:
+
+```java
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.core.ProducerFactory;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Configuration
+public class KafkaProducerConfig {
+
+    @Bean
+    public ProducerFactory<String, String> producerFactory() {
+        Map<String, Object> config = new HashMap<>();
+
+        // --- Bootstrap ---
+        config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+
+        // --- Reliability ---
+        config.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        config.put(ProducerConfig.ACKS_CONFIG, "all");
+        config.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
+
+        // --- Fault tolerance ---
+        config.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);
+        config.put(ProducerConfig.RETRY_BACKOFF_MS_CONFIG, 100);
+        config.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 30000);
+        config.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 120000);
+
+        // --- Performance tuning ---
+        config.put(ProducerConfig.LINGER_MS_CONFIG, 10);
+        config.put(ProducerConfig.BATCH_SIZE_CONFIG, 32768);
+        config.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "snappy");
+
+        return new DefaultKafkaProducerFactory<>(config);
+    }
+
+    @Bean
+    public KafkaTemplate<String, String> kafkaTemplate() {
+        return new KafkaTemplate<>(producerFactory());
+    }
+}
+```
+➡️ This is the programmatic equivalent to your `application.yml` configuration.
+
+---
+
+### 2️⃣ Quarkus – Java Config
+
+In **Quarkus**, the standard way is still using `application.properties` because Quarkus integrates with **SmallRye Reactive Messaging**. However, you can configure producers programmatically if needed.
+
+- because it integrates with SmallRye Reactive Messaging, letting Quarkus manage and optimize the Kafka producer lifecycle at build time.
+Programmatic config is only needed if you require dynamic or advanced control beyond what SmallRye provides.
+
+#### Option 1: Using SmallRye APIs (Advanced)
+This method is less common but allows programmatic configuration that still integrates with SmallRye channels.
+
+```java
+import io.smallrye.reactive.messaging.kafka.KafkaConnectorOutgoingConfiguration;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.StringSerializer;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Produces;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@ApplicationScoped
+public class KafkaProducerConfig {
+
+    @Produces
+    public KafkaConnectorOutgoingConfiguration paymentsOutConfig() {
+        Map<String, Object> config = new HashMap<>();
+
+        // --- Bootstrap ---
+        config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+
+        // --- Reliability & Fault Tolerance ---
+        config.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        config.put(ProducerConfig.ACKS_CONFIG, "all");
+        config.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
+        config.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);
+        config.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 120000);
+        
+        // --- Performance Tuning ---
+        config.put(ProducerConfig.LINGER_MS_CONFIG, 10);
+        config.put(ProducerConfig.BATCH_SIZE_CONFIG, 32768);
+        config.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "snappy");
+
+        // The name "payments-out" must match the channel name used in your @Channel annotation
+        return new KafkaConnectorOutgoingConfiguration("payments-out", config);
+    }
+}
+```
+
+#### Option 2: Bypassing SmallRye and Using the Native Kafka Client
+This approach is simpler if you don't need the Reactive Messaging channel abstraction and want direct control.
+
+```java
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.StringSerializer;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@ApplicationScoped
+public class CustomKafkaProducerProvider {
+
+    private final KafkaProducer<String, String> producer;
+
+    @Inject
+    public CustomKafkaProducerProvider() {
+        Map<String, Object> config = new HashMap<>();
+        config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        config.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        config.put(ProducerConfig.ACKS_CONFIG, "all");
+        config.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
+        config.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);
+        config.put(ProducerConfig.LINGER_MS_CONFIG, 10);
+        config.put(ProducerConfig.BATCH_SIZE_CONFIG, 32768);
+        config.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "snappy");
+
+        this.producer = new KafkaProducer<>(config);
+    }
+
+    public KafkaProducer<String, String> getProducer() {
+        return producer;
+    }
+    
+    // Remember to add a @PreDestroy method to close the producer
+}
+```
+
+---
+
